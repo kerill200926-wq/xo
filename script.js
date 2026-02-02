@@ -1,172 +1,336 @@
-const board = document.getElementById("board");
-const cells = Array.from(document.querySelectorAll(".cell"));
-const statusText = document.getElementById("statusText");
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
 const restartButton = document.getElementById("restart");
+const evolutionName = document.getElementById("evolutionName");
+const evolutionLevel = document.getElementById("evolutionLevel");
+const statPower = document.getElementById("statPower");
+const statSpeed = document.getElementById("statSpeed");
+const statHealth = document.getElementById("statHealth");
+const statKills = document.getElementById("statKills");
+const statProgress = document.getElementById("statProgress");
+const evolutionList = document.getElementById("evolutionList");
 
-const player = "X";
-const bot = "O";
-let state = Array(9).fill(null);
-let gameActive = true;
-let audioContext;
-
-const WIN_COMBOS = [
-  [0, 1, 2],
-  [3, 4, 5],
-  [6, 7, 8],
-  [0, 3, 6],
-  [1, 4, 7],
-  [2, 5, 8],
-  [0, 4, 8],
-  [2, 4, 6],
+const evolutions = [
+  { name: "Микроорганизм", power: 4, speed: 1.9, maxHealth: 40, required: 2 },
+  { name: "Одноклеточный охотник", power: 6, speed: 2.2, maxHealth: 50, required: 3 },
+  { name: "Колония спор", power: 7, speed: 2.4, maxHealth: 60, required: 3 },
+  { name: "Планктонный рой", power: 8, speed: 2.5, maxHealth: 70, required: 4 },
+  { name: "Быстрый мальок", power: 10, speed: 2.8, maxHealth: 80, required: 4 },
+  { name: "Хищная рыба", power: 12, speed: 3.1, maxHealth: 95, required: 5 },
+  { name: "Древний амфибий", power: 14, speed: 3.3, maxHealth: 110, required: 5 },
+  { name: "Ловкий рептилий", power: 16, speed: 3.6, maxHealth: 125, required: 6 },
+  { name: "Саблезуб", power: 18, speed: 3.8, maxHealth: 140, required: 6 },
+  { name: "Стая охотников", power: 20, speed: 4.1, maxHealth: 155, required: 7 },
+  { name: "Доминирующий хищник", power: 22, speed: 4.3, maxHealth: 170, required: 7 },
+  { name: "Грозовой ящер", power: 25, speed: 4.6, maxHealth: 190, required: 8 },
+  { name: "Кибер-зверь", power: 28, speed: 4.9, maxHealth: 215, required: 8 },
+  { name: "Элитный мутант", power: 32, speed: 5.2, maxHealth: 245, required: 9 },
+  { name: "Абсолютный вид", power: 36, speed: 5.6, maxHealth: 280, required: 10 },
 ];
 
-const ensureAudioContext = () => {
-  if (!audioContext) {
-    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  if (audioContext.state === "suspended") {
-    audioContext.resume();
-  }
+const state = {
+  level: 0,
+  kills: 0,
+  progress: 0,
+  gameOver: false,
+  message: "",
 };
 
-const playTone = (frequency, duration = 0.2, type = "sine", volume = 0.12) => {
-  ensureAudioContext();
-  const oscillator = audioContext.createOscillator();
-  const gain = audioContext.createGain();
-  oscillator.type = type;
-  oscillator.frequency.value = frequency;
-  gain.gain.value = volume;
-  oscillator.connect(gain);
-  gain.connect(audioContext.destination);
-  oscillator.start();
-  oscillator.stop(audioContext.currentTime + duration);
+const player = {
+  x: canvas.width / 2,
+  y: canvas.height / 2,
+  radius: 14,
+  power: evolutions[0].power,
+  speed: evolutions[0].speed,
+  maxHealth: evolutions[0].maxHealth,
+  health: evolutions[0].maxHealth,
+  dashCooldown: 0,
+  dashTimer: 0,
 };
 
-const playPlaceSound = (symbol) => {
-  if (symbol === "X") {
-    playTone(440, 0.15, "triangle");
+const enemyConfig = {
+  count: 8,
+  baseHealth: 20,
+  basePower: 6,
+  baseSpeed: 1.4,
+};
+
+let enemies = [];
+const keys = new Set();
+
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+const resetPlayer = () => {
+  const evo = evolutions[state.level];
+  player.x = canvas.width / 2;
+  player.y = canvas.height / 2;
+  player.power = evo.power;
+  player.speed = evo.speed;
+  player.maxHealth = evo.maxHealth;
+  player.health = evo.maxHealth;
+  player.dashCooldown = 0;
+  player.dashTimer = 0;
+};
+
+const spawnEnemy = () => {
+  const edge = Math.floor(Math.random() * 4);
+  const margin = 20;
+  let x = margin;
+  let y = margin;
+  if (edge === 0) {
+    x = Math.random() * canvas.width;
+    y = margin;
+  } else if (edge === 1) {
+    x = canvas.width - margin;
+    y = Math.random() * canvas.height;
+  } else if (edge === 2) {
+    x = Math.random() * canvas.width;
+    y = canvas.height - margin;
   } else {
-    playTone(330, 0.15, "square");
+    x = margin;
+    y = Math.random() * canvas.height;
   }
+
+  const levelBoost = state.level * 0.15;
+  return {
+    id: crypto.randomUUID(),
+    x,
+    y,
+    radius: 12 + Math.random() * 6,
+    health: enemyConfig.baseHealth + state.level * 4,
+    power: enemyConfig.basePower + levelBoost * 5,
+    speed: enemyConfig.baseSpeed + levelBoost,
+  };
 };
 
-const playWinSound = () => {
-  playTone(523.25, 0.18, "sine", 0.16);
-  setTimeout(() => playTone(659.25, 0.18, "sine", 0.16), 160);
-  setTimeout(() => playTone(783.99, 0.22, "sine", 0.18), 320);
+const resetEnemies = () => {
+  enemies = Array.from({ length: enemyConfig.count }, spawnEnemy);
 };
 
-const playLoseSound = () => {
-  playTone(392, 0.2, "sawtooth", 0.14);
-  setTimeout(() => playTone(311.13, 0.22, "sawtooth", 0.12), 190);
-  setTimeout(() => playTone(246.94, 0.24, "sawtooth", 0.12), 370);
-};
+const updateEvolutionUI = () => {
+  const evo = evolutions[state.level];
+  evolutionName.textContent = evo.name;
+  evolutionLevel.textContent = `${state.level + 1} / ${evolutions.length}`;
+  statPower.textContent = player.power.toFixed(0);
+  statSpeed.textContent = player.speed.toFixed(1);
+  statHealth.textContent = `${Math.max(0, Math.ceil(player.health))} / ${player.maxHealth}`;
+  statKills.textContent = state.kills;
+  statProgress.textContent = `${state.progress} / ${evo.required}`;
 
-const updateStatus = (message) => {
-  statusText.textContent = message;
-};
-
-const highlightWin = (combo) => {
-  combo.forEach((index) => {
-    cells[index].classList.add("win-cell");
+  Array.from(evolutionList.children).forEach((item, index) => {
+    item.classList.toggle("active", index === state.level);
   });
 };
 
-const clearHighlights = () => {
-  cells.forEach((cell) => cell.classList.remove("win-cell"));
-  board.classList.remove("win", "lose");
-};
-
-const checkWinner = () => {
-  for (const combo of WIN_COMBOS) {
-    const [a, b, c] = combo;
-    if (state[a] && state[a] === state[b] && state[a] === state[c]) {
-      return { winner: state[a], combo };
+const buildEvolutionList = () => {
+  evolutionList.innerHTML = "";
+  evolutions.forEach((evo, index) => {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.textContent = `${index + 1}.`;
+    const name = document.createElement("div");
+    name.textContent = evo.name;
+    item.append(label, name);
+    if (index === state.level) {
+      item.classList.add("active");
     }
-  }
-  if (state.every(Boolean)) {
-    return { winner: "draw" };
-  }
-  return null;
+    evolutionList.append(item);
+  });
 };
 
-const placeMark = (index, symbol) => {
-  state[index] = symbol;
-  const cell = cells[index];
-  cell.textContent = symbol;
-  cell.classList.add("filled", symbol.toLowerCase(), "pop");
-  playPlaceSound(symbol);
-  setTimeout(() => cell.classList.remove("pop"), 450);
+const evolve = () => {
+  if (state.level >= evolutions.length - 1) {
+    return;
+  }
+  state.level += 1;
+  state.progress = 0;
+  const evo = evolutions[state.level];
+  player.power = evo.power;
+  player.speed = evo.speed;
+  player.maxHealth = evo.maxHealth;
+  player.health = player.maxHealth;
+  state.message = `Эволюция! Теперь ты: ${evo.name}`;
+  updateEvolutionUI();
 };
 
-const endGame = (result) => {
-  gameActive = false;
-  if (result.winner === "draw") {
-    updateStatus("Ничья! Попробуем еще?");
+const handleAttack = () => {
+  if (state.gameOver) {
+    return;
+  }
+  const range = player.radius + 32;
+  let target = null;
+  let minDistance = Infinity;
+
+  enemies.forEach((enemy) => {
+    const dx = enemy.x - player.x;
+    const dy = enemy.y - player.y;
+    const distance = Math.hypot(dx, dy);
+    if (distance < range && distance < minDistance) {
+      target = enemy;
+      minDistance = distance;
+    }
+  });
+
+  if (!target) {
     return;
   }
 
-  highlightWin(result.combo);
-  if (result.winner === player) {
-    board.classList.add("win");
-    updateStatus("Ты выиграл! Великолепно!");
-    playWinSound();
+  target.health -= player.power;
+  if (target.health <= 0) {
+    enemies = enemies.filter((enemy) => enemy.id !== target.id);
+    state.kills += 1;
+    state.progress += 1;
+    state.message = "Цель уничтожена!";
+
+    if (state.progress >= evolutions[state.level].required) {
+      evolve();
+    }
+
+    enemies.push(spawnEnemy());
   } else {
-    board.classList.add("lose");
-    updateStatus("Ты проиграл. Бот оказался хитрее.");
-    playLoseSound();
+    state.message = "Удар успешен!";
+  }
+  updateEvolutionUI();
+};
+
+const updatePlayer = () => {
+  const moveX = (keys.has("ArrowRight") || keys.has("d") ? 1 : 0) -
+    (keys.has("ArrowLeft") || keys.has("a") ? 1 : 0);
+  const moveY = (keys.has("ArrowDown") || keys.has("s") ? 1 : 0) -
+    (keys.has("ArrowUp") || keys.has("w") ? 1 : 0);
+
+  const magnitude = Math.hypot(moveX, moveY) || 1;
+  let speed = player.speed;
+
+  if (player.dashTimer > 0) {
+    speed *= 2.2;
+    player.dashTimer -= 1;
+  } else if (player.dashCooldown > 0) {
+    player.dashCooldown -= 1;
+  }
+
+  player.x += (moveX / magnitude) * speed;
+  player.y += (moveY / magnitude) * speed;
+  player.x = clamp(player.x, player.radius, canvas.width - player.radius);
+  player.y = clamp(player.y, player.radius, canvas.height - player.radius);
+};
+
+const updateEnemies = () => {
+  enemies.forEach((enemy) => {
+    const dx = player.x - enemy.x;
+    const dy = player.y - enemy.y;
+    const distance = Math.hypot(dx, dy) || 1;
+    enemy.x += (dx / distance) * enemy.speed;
+    enemy.y += (dy / distance) * enemy.speed;
+
+    if (distance < enemy.radius + player.radius) {
+      player.health -= enemy.power * 0.08;
+    }
+  });
+
+  if (player.health <= 0 && !state.gameOver) {
+    state.gameOver = true;
+    state.message = "Ты пал. Нажми 'Новая симуляция' чтобы начать заново.";
   }
 };
 
-const botMove = () => {
-  const available = state
-    .map((value, index) => (value ? null : index))
-    .filter((value) => value !== null);
+const draw = () => {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-  if (available.length === 0 || !gameActive) {
-    return;
+  ctx.fillStyle = "rgba(18, 24, 45, 0.6)";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  enemies.forEach((enemy) => {
+    ctx.beginPath();
+    ctx.fillStyle = "rgba(255, 97, 124, 0.85)";
+    ctx.arc(enemy.x, enemy.y, enemy.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255, 255, 255, 0.35)";
+    ctx.fillRect(enemy.x - enemy.radius, enemy.y - enemy.radius - 8, enemy.radius * 2, 4);
+    ctx.fillStyle = "rgba(255, 97, 124, 0.9)";
+    ctx.fillRect(
+      enemy.x - enemy.radius,
+      enemy.y - enemy.radius - 8,
+      (enemy.radius * 2 * Math.max(0, enemy.health)) / (enemyConfig.baseHealth + state.level * 4),
+      4
+    );
+  });
+
+  ctx.beginPath();
+  ctx.fillStyle = "rgba(124, 245, 255, 0.9)";
+  ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = "rgba(124, 245, 255, 0.35)";
+  ctx.fillRect(player.x - 30, player.y + player.radius + 10, 60, 6);
+  ctx.fillStyle = "rgba(124, 245, 255, 0.9)";
+  ctx.fillRect(player.x - 30, player.y + player.radius + 10, 60 * (player.health / player.maxHealth), 6);
+
+  if (state.message) {
+    ctx.fillStyle = "rgba(15, 18, 35, 0.7)";
+    ctx.fillRect(16, canvas.height - 54, canvas.width - 32, 38);
+    ctx.fillStyle = "#f6f7ff";
+    ctx.font = "15px Inter, sans-serif";
+    ctx.fillText(state.message, 28, canvas.height - 30);
   }
 
-  const choice = available[Math.floor(Math.random() * available.length)];
-  placeMark(choice, bot);
-
-  const result = checkWinner();
-  if (result) {
-    endGame(result);
-  } else {
-    updateStatus("Твой ход. Поставь X.");
+  if (state.gameOver) {
+    ctx.fillStyle = "rgba(8, 10, 20, 0.75)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#ff617c";
+    ctx.font = "24px Inter, sans-serif";
+    ctx.fillText("Эволюция остановлена", 190, canvas.height / 2 - 10);
+    ctx.fillStyle = "#f6f7ff";
+    ctx.font = "16px Inter, sans-serif";
+    ctx.fillText("Начни заново, чтобы попробовать еще раз.", 170, canvas.height / 2 + 20);
   }
 };
 
-const handleCellClick = (event) => {
-  const index = Number(event.currentTarget.dataset.index);
-  if (!gameActive || state[index]) {
-    return;
+const tick = () => {
+  if (!state.gameOver) {
+    updatePlayer();
+    updateEnemies();
   }
-
-  clearHighlights();
-  placeMark(index, player);
-
-  const result = checkWinner();
-  if (result) {
-    endGame(result);
-    return;
-  }
-
-  updateStatus("Ход бота...");
-  setTimeout(botMove, 500);
+  updateEvolutionUI();
+  draw();
+  requestAnimationFrame(tick);
 };
 
 const resetGame = () => {
-  state = Array(9).fill(null);
-  gameActive = true;
-  cells.forEach((cell) => {
-    cell.textContent = "";
-    cell.className = "cell";
-  });
-  clearHighlights();
-  updateStatus("Твой ход. Поставь X.");
+  state.level = 0;
+  state.kills = 0;
+  state.progress = 0;
+  state.gameOver = false;
+  state.message = "Охота началась!";
+  resetPlayer();
+  resetEnemies();
+  buildEvolutionList();
+  updateEvolutionUI();
 };
 
-cells.forEach((cell) => cell.addEventListener("click", handleCellClick));
+window.addEventListener("keydown", (event) => {
+  if (event.repeat) {
+    return;
+  }
+  keys.add(event.key);
+
+  if (event.key === " " || event.code === "Space") {
+    handleAttack();
+  }
+
+  if (event.key === "Shift" && player.dashCooldown === 0) {
+    player.dashTimer = 14;
+    player.dashCooldown = 90;
+  }
+});
+
+window.addEventListener("keyup", (event) => {
+  keys.delete(event.key);
+});
+
 restartButton.addEventListener("click", resetGame);
+
+buildEvolutionList();
+resetGame();
+requestAnimationFrame(tick);
